@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+
+set -e            # fail fast
+set -o pipefail   # do not ignore exit codes when piping output
+# set -x # debug
+
+GREP_OPTIONS=''
+
+cp nginx.conf tmp/nginx.conf
+
+grep_replace_with_env='heroku:replace_with_env:(.+):(.+)\s*'
+\egrep -n -A1 -Z "$grep_replace_with_env" nginx.conf | while read -r annotation; do
+  read -r line;
+  read -r separator || separator='';
+
+  line_number=$(echo "$annotation" | sed 's/^\([0-9]\+\):.*/\1/')
+  annotation=$(echo "$annotation" | \egrep -o "$grep_replace_with_env") # clear annotation
+
+  let "line_number += 1"
+
+  sed_replace_with_env='heroku:replace_with_env:\(.\+\):\(.\+\)\s*';
+  placeholder=$(echo "$annotation" | sed "s/$sed_replace_with_env/\\1/")
+  value=$(echo "$annotation" | sed "s/$sed_replace_with_env/\\2/")
+
+  sed -i "${line_number}s/$placeholder/$(eval echo \$$value)/" tmp/nginx.conf
+done
+
+grep_replace='heroku:replace:(.+):(.+)\s*'
+\egrep -n -A1 -Z "$grep_replace" nginx.conf | while read -r annotation; do
+  read -r line;
+  read -r separator || separator='';
+
+  line_number=$(echo "$annotation" | sed 's/^\([0-9]\+\):.*/\1/')
+  annotation=$(echo "$annotation" | \egrep -o "$grep_replace") # clear annotation
+
+  let "line_number += 1"
+
+  sed_replace='heroku:replace:\(.\+\):\(.\+\)\s*';
+  placeholder=$(echo "$annotation" | sed "s/$sed_replace/\\1/")
+  value=$(echo "$annotation" | sed "s/$sed_replace/\\2/")
+
+  sed -i "${line_number}s/$placeholder/$value/" tmp/nginx.conf
+done
+
+mv tmp/nginx.conf vendor/nginx/conf

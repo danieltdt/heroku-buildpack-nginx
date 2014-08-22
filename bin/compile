@@ -1,0 +1,144 @@
+#!/usr/bin/env bash
+# bin/compile <build-dir> <cache-dir> <env-dir>
+
+set -e            # fail fast
+set -o pipefail   # do not ignore exit codes when piping output
+# set -x          # enable debugging
+
+# Configure directories
+build_dir=$1
+cache_dir=$2
+env_dir=$3
+bp_dir=$(cd $(dirname $0); cd ..; pwd)
+
+source $bp_dir/bin/common.sh
+
+semver_range=$(cat $build_dir/nginx.json | $bp_dir/vendor/jq -r .nginx.version)
+nginx_version=$(curl --silent --get --data-urlencode "rage=${semver_range}" http://secret-oasis-8906.herokuapp.com/nginx/resolve)
+
+# Recommend using semver ranges in a safe manner
+if [ "$semver_range" == "null" ]; then
+  protip "Specify a nginx version in nginx.json"
+  semver_range=""
+elif [ "$semver_range" == "*" ]; then
+  protip "Avoid using semver ranges like '*' in nginx.version"
+elif [ ${semver_range:0:1} == ">" ]; then
+  protip "Avoid using semver ranges starting with '>' in nginx.version"
+fi
+
+# Output info about requested range and resolved nginx version
+if [ "$semver_range" == "" ]; then
+  say "Defaulting to latest stable nginx: $nginx_version"
+else
+  say "Requested nginx range:  $semver_range"
+  say "Resolved nginx version: $nginx_version"
+fi
+
+recompile="no"
+nginx_filename="nginx-${nginx_version}"
+nginx_url="http://nginx.org/download/${nginx_filename}.tar.gz"
+nginx_source_dir="$cache_dir/nginx-src"
+nginx_install_dir="$build_dir/vendor/nginx"
+
+mkdir -p $nginx_source_dir
+rm -rf $nginx_install_dir; mkdir -p $nginx_install_dir
+
+# Check nginx version
+if ! test -f $nginx_install_dir/sbin/nginx || ! (test -f $cache_dir/nginx-version && [ $(cat $cache_dir/nginx-version) == "$nginx_version" ]); then
+  recompile="yes"
+  say "Nginx version changed since last build; recompiling the new version"
+  echo $nginx_version > $cache_dir/nginx-version
+fi
+
+# Check nginx modules
+nginx_custom_modules=""
+if test -d $build_dir/modules; then
+  modules_checksums=$nginx_source_dir/modules-checksums
+  checksums=""
+
+  find $build_dir/modules/*.tar.gz -maxdepth 1 -type f -print0 2> /dev/null || echo '' | \
+  while read -r -d '' module_filename; do
+    md5="$(md5sum $module_filename)"
+    checksums="$md5\n$checksums"
+
+    grep "$md5" $modules_checksums 2> /dev/null
+    if [ $? -ne 0 ]; then
+      if [ recompile == "no" ]; then say "New modules detected; recompiling nginx"; fi
+      recompile="yes"
+      say "Adding module '$(basename $module_filename)' to modules-to-compile list"
+      nginx_custom_modules="$nginx_custom_modules --add-module=$module_filename"
+    fi
+  done
+
+  # rewrite module-checksums file
+  echo -e $checksums > $modules_checksums
+fi
+
+if [ $recompile == "yes" ]; then
+  # Download, compile & install nginx from nginx.org
+  if test -d $nginx_source_dir/$nginx_filename/src; then
+    say "Found source on cache; skipping download"
+  else
+    say "Downloading nginx source"
+    rm -rf $nginx_source_dir
+    mkdir -p $nginx_source_dir
+
+    add_nginx_mantainers_pgp_keys 2>&1 | indent
+
+    curl "${nginx_url}.asc" -s -o nginx-source.tar.gz.asc
+    curl $nginx_url -s -o nginx-source.tar.gz
+
+    verify_gpg "nginx-source.tar.gz.asc" 2>&1 | indent
+
+    # Extract files and remove tarball & signature file
+    tar xzf nginx-source.tar.gz -C $nginx_source_dir
+    rm nginx-source.tar.gz.asc
+    rm nginx-source.tar.gz
+  fi
+
+  cd $nginx_source_dir/$nginx_filename
+  say "Running configure"
+  ./configure --prefix=$nginx_install_dir \
+    --with-http_ssl_module \
+    --with-http_gzip_static_module \
+    --with-http_addition_module \
+    $nginx_custom_modules 2>&1 | indent
+
+  say "Running make"
+  make 2>&1 | indent
+
+  say "Installing"
+  make install 2>&1 | indent
+  chmod +x $nginx_install_dir/sbin/*
+
+  cp $bp_dir/bin/compile_annotations $build_dir/vendor/nginx/sbin
+
+  say "Building runtime environment"
+  mkdir -p $build_dir/.profile.d
+  echo "export PATH=\"\$HOME/vendor/nginx/sbin:\$PATH\";" > $build_dir/.profile.d/nginx.sh
+
+  say "Copying nginx custom config files"
+  mkdir -p $nginx_install_dir/conf.d
+  if [ "$(ls -A $bp_dir/conf/*.conf 2> /dev/null)" ]; then
+    cp -r $bp_dir/conf/* $nginx_install_dir/conf.d/
+  fi
+
+  # Disable daemon
+  sed '/^http {/i# heroku:replace:on;:off;\ndaemon on;' $nginx_install_dir/conf/nginx.conf \
+    > $cache_dir/include-conf && mv $cache_dir/include-conf $nginx_install_dir/conf/nginx.conf
+
+  # Load conf.d files
+  sed '/^http {/ainclude conf.d/*.conf;' $nginx_install_dir/conf/nginx.conf \
+    > $cache_dir/include-conf && mv $cache_dir/include-conf $nginx_install_dir/conf/nginx.conf
+
+  # Add heroku replace annotation
+  sed '/^\s*listen\s\+80/i# heroku:replace_with_env:80:PORT' $nginx_install_dir/conf/nginx.conf \
+    > $cache_dir/include-conf && mv $cache_dir/include-conf $nginx_install_dir/conf/nginx.conf
+fi
+
+# Copying default nginx.conf
+if [ ! -e $build_dir/nginx.conf ]; then
+  say "No nginx.conf found; using default"
+  protip "Create your own nginx.conf file with your server configurations"
+  cp $nginx_install_dir/conf/nginx.conf $build_dir/nginx.conf
+fi
