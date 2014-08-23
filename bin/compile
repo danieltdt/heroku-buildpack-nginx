@@ -39,114 +39,124 @@ nginx_filename="nginx-${nginx_version}"
 nginx_url="http://nginx.org/download/${nginx_filename}.tar.gz"
 nginx_source_dir="$cache_dir/nginx-src"
 nginx_install_dir="$build_dir/vendor/nginx"
+pcre_path="$nginx_source_dir/pcre-src"
 
 mkdir -p $nginx_source_dir
 rm -rf $nginx_install_dir; mkdir -p $nginx_install_dir
 
-# Check nginx version
-if ! test -f $nginx_install_dir/sbin/nginx || ! (test -f $cache_dir/nginx-version && [ $(cat $cache_dir/nginx-version) == "$nginx_version" ]); then
-  recompile="yes"
-  say "Nginx version changed since last build; recompiling the new version"
-  echo $nginx_version > $cache_dir/nginx-version
-fi
+if test -f $nginx_install_dir/sbin/nginx; then
+  say "Nginx found at '$nginx_install_dir'; Ignoring .nginx.version from nginx.json";
+else
+  # Check nginx version
+  if ! (test -f $cache_dir/nginx-version && [ $(cat $cache_dir/nginx-version) == "$nginx_version" ]); then
+    recompile="yes"
+    say "Nginx version changed since last build; recompiling the new version"
+  fi
 
-# Check nginx modules
-nginx_custom_modules=""
-if test -d $build_dir/modules; then
-  modules_checksums=$nginx_source_dir/modules-checksums
-  checksums=""
+  # Check nginx modules
+  nginx_custom_modules=""
+  if test -d $build_dir/modules; then
+    modules_checksums=$nginx_source_dir/modules-checksums
+    checksums=""
 
-  find $build_dir/modules/*.tar.gz -maxdepth 1 -type f -print0 2> /dev/null || echo '' | \
-  while read -r -d '' module_filename; do
-    md5="$(md5sum $module_filename)"
-    checksums="$md5\n$checksums"
+    find $build_dir/modules/*.tar.gz -maxdepth 1 -type f -print0 2> /dev/null || echo '' | \
+    while read -r -d '' module_filename; do
+      md5="$(md5sum $module_filename)"
+      checksums="$md5\n$checksums"
 
-    grep "$md5" $modules_checksums 2> /dev/null
-    if [ $? -ne 0 ]; then
-      if [ recompile == "no" ]; then say "New modules detected; recompiling nginx"; fi
-      recompile="yes"
-      say "Adding module '$(basename $module_filename)' to modules-to-compile list"
-      nginx_custom_modules="$nginx_custom_modules --add-module=$module_filename"
+      grep "$md5" $modules_checksums 2> /dev/null
+      if [ $? -ne 0 ]; then
+        if [ recompile == "no" ]; then say "New modules detected; recompiling nginx"; fi
+        recompile="yes"
+        say "Adding module '$(basename $module_filename)' to modules-to-compile list"
+        nginx_custom_modules="$nginx_custom_modules --add-module=$module_filename"
+      fi
+    done
+
+    # rewrite module-checksums file
+    echo -e $checksums > $modules_checksums
+  fi
+
+  if ! test -f $cache_dir/nginx-compiled/sbin/nginx; then recompile="yes"; fi
+
+  if [ $recompile == "yes" ]; then
+    # Download, compile & install nginx from nginx.org
+    if test -d $nginx_source_dir/$nginx_filename/src; then
+      say "Found source on cache; skipping download"
+    else
+      rm -rf $nginx_source_dir
+      mkdir -p $nginx_source_dir
+
+      say "Adding nginx mainteners keys to gpg"
+      add_nginx_mantainers_pgp_keys 2>&1 | indent
+
+      say "Downloading nginx and pcre source"
+      curl "${nginx_url}.asc" -s -o nginx-source.tar.gz.asc
+      curl $nginx_url -s -o nginx-source.tar.gz
+      curl -L http://sourceforge.net/projects/pcre/files/latest/download -s -o pcre-latest.tar
+
+      say "Verifying downloads"
+      # TODO: Verify pcre download
+      verify_gpg "nginx-source.tar.gz.asc" 2>&1 | indent
+
+      pcre_dir_name=$(tar -tf pcre-latest.tar | head -n1 || echo '' > /dev/null)
+
+      # Extract files and remove tarball & signature file
+      tar xzf nginx-source.tar.gz -C $nginx_source_dir
+      tar xf pcre-latest.tar -C .
+      mv "./$pcre_dir_name" "$pcre_path"
+
+      rm nginx-source.tar.gz.asc
+      rm nginx-source.tar.gz
+      rm pcre-latest.tar
     fi
-  done
 
-  # rewrite module-checksums file
-  echo -e $checksums > $modules_checksums
+    cd $nginx_source_dir/$nginx_filename
+    say "Running configure"
+    ./configure --prefix=$nginx_install_dir \
+      --with-http_ssl_module \
+      --with-http_gzip_static_module \
+      --with-http_addition_module \
+      --with-pcre=$pcre_path \
+      $nginx_custom_modules 2>&1 | indent
+
+    say "Running make"
+    make 2>&1 | indent
+
+    say "Installing"
+    make install 2>&1 | indent
+    chmod +x $nginx_install_dir/sbin/*
+    echo $nginx_version > $cache_dir/nginx-version
+
+    say "Copying nginx custom config files"
+    mkdir -p $nginx_install_dir/conf.d
+    if [ "$(ls -A $bp_dir/conf/*.conf 2> /dev/null)" ]; then
+      cp -r $bp_dir/conf/* $nginx_install_dir/conf.d/
+    fi
+
+    # Disable daemon
+    sed '/^http {/i# heroku:replace:on;:off;\ndaemon on;' $nginx_install_dir/conf/nginx.conf \
+      > $cache_dir/include-conf && mv $cache_dir/include-conf $nginx_install_dir/conf/nginx.conf
+
+    # Load conf.d files
+    sed '/^http {/ainclude conf.d/*.conf;' $nginx_install_dir/conf/nginx.conf \
+      > $cache_dir/include-conf && mv $cache_dir/include-conf $nginx_install_dir/conf/nginx.conf
+
+    # Add heroku replace annotation
+    sed '/^\s*listen\s\+80/i# heroku:replace_with_env:80:PORT' $nginx_install_dir/conf/nginx.conf \
+      > $cache_dir/include-conf && mv $cache_dir/include-conf $nginx_install_dir/conf/nginx.conf
+  fi
 fi
 
-if [ $recompile == "yes" ]; then
-  # Download, compile & install nginx from nginx.org
-  if test -d $nginx_source_dir/$nginx_filename/src; then
-    say "Found source on cache; skipping download"
-  else
-    rm -rf $nginx_source_dir
-    mkdir -p $nginx_source_dir
-    mkdir -p $nginx_source_dir/pcre-src
+cp $bp_dir/bin/compile_annotations $build_dir/vendor/nginx/sbin
 
-    say "Adding nginx mainteners keys to gpg"
-    add_nginx_mantainers_pgp_keys 2>&1 | indent
+say "Building runtime environment"
+mkdir -p $build_dir/.profile.d
+echo "export PATH=\"\$HOME/vendor/nginx/sbin:\$PATH\";" > $build_dir/.profile.d/nginx.sh
 
-    say "Downloading nginx and pcre source"
-    curl "${nginx_url}.asc" -s -o nginx-source.tar.gz.asc
-    curl $nginx_url -s -o nginx-source.tar.gz
-    curl -L http://sourceforge.net/projects/pcre/files/latest/download -s -o pcre-latest.tar
-
-    say "Verifying downloads"
-    # TODO: Verify pcre download
-    verify_gpg "nginx-source.tar.gz.asc" 2>&1 | indent
-
-    pcre_dir_name=$(tar -tf pcre-latest.tar | head -n1 || echo '')
-    pcre_path="$nginx_source_dir/pcre-src/$pcre_dir_name"
-
-    # Extract files and remove tarball & signature file
-    tar xzf nginx-source.tar.gz -C $nginx_source_dir
-    tar xf pcre-latest.tar -C $nginx_source_dir/pcre-src
-
-    rm nginx-source.tar.gz.asc
-    rm nginx-source.tar.gz
-    rm pcre-latest.tar
-  fi
-
-  cd $nginx_source_dir/$nginx_filename
-  say "Running configure"
-  ./configure --prefix=$nginx_install_dir \
-    --with-http_ssl_module \
-    --with-http_gzip_static_module \
-    --with-http_addition_module \
-    --with-pcre=$pcre_path \
-    $nginx_custom_modules 2>&1 | indent
-
-  say "Running make"
-  make 2>&1 | indent
-
-  say "Installing"
-  make install 2>&1 | indent
-  chmod +x $nginx_install_dir/sbin/*
-
-  cp $bp_dir/bin/compile_annotations $build_dir/vendor/nginx/sbin
-
-  say "Building runtime environment"
-  mkdir -p $build_dir/.profile.d
-  echo "export PATH=\"\$HOME/vendor/nginx/sbin:\$PATH\";" > $build_dir/.profile.d/nginx.sh
-
-  say "Copying nginx custom config files"
-  mkdir -p $nginx_install_dir/conf.d
-  if [ "$(ls -A $bp_dir/conf/*.conf 2> /dev/null)" ]; then
-    cp -r $bp_dir/conf/* $nginx_install_dir/conf.d/
-  fi
-
-  # Disable daemon
-  sed '/^http {/i# heroku:replace:on;:off;\ndaemon on;' $nginx_install_dir/conf/nginx.conf \
-    > $cache_dir/include-conf && mv $cache_dir/include-conf $nginx_install_dir/conf/nginx.conf
-
-  # Load conf.d files
-  sed '/^http {/ainclude conf.d/*.conf;' $nginx_install_dir/conf/nginx.conf \
-    > $cache_dir/include-conf && mv $cache_dir/include-conf $nginx_install_dir/conf/nginx.conf
-
-  # Add heroku replace annotation
-  sed '/^\s*listen\s\+80/i# heroku:replace_with_env:80:PORT' $nginx_install_dir/conf/nginx.conf \
-    > $cache_dir/include-conf && mv $cache_dir/include-conf $nginx_install_dir/conf/nginx.conf
-fi
+say "Recrating cache files"
+rm -rf "$cache_dir/nginx-compiled"
+cp -r $nginx_install_dir "$cache_dir/nginx-compiled"
 
 # Copying default nginx.conf
 if [ ! -e $build_dir/nginx.conf ]; then
