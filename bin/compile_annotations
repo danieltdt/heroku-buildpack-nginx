@@ -6,6 +6,7 @@ set -o pipefail   # do not ignore exit codes when piping output
 
 GREP_OPTIONS=''
 
+mkdir -p ./tmp
 cp nginx.conf tmp/nginx.conf
 
 grep_replace_with_env='heroku:replace_with_env:(.+):(.+)\s*'
