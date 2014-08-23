@@ -14,7 +14,7 @@ bp_dir=$(cd $(dirname $0); cd ..; pwd)
 source $bp_dir/bin/common.sh
 
 semver_range=$(cat $build_dir/nginx.json | $bp_dir/vendor/jq -r .nginx.version)
-nginx_version=$(curl --silent --get --data-urlencode "rage=${semver_range}" http://secret-oasis-8906.herokuapp.com/nginx/resolve)
+nginx_version=$(curl --silent --get --data-urlencode "range=${semver_range}" https://semver.io/nginx/resolve)
 
 # Recommend using semver ranges in a safe manner
 if [ "$semver_range" == "null" ]; then
