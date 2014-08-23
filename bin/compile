@@ -79,21 +79,32 @@ if [ $recompile == "yes" ]; then
   if test -d $nginx_source_dir/$nginx_filename/src; then
     say "Found source on cache; skipping download"
   else
-    say "Downloading nginx source"
     rm -rf $nginx_source_dir
     mkdir -p $nginx_source_dir
+    mkdir -p $nginx_source_dir/pcre-src
 
+    say "Adding nginx mainteners keys to gpg"
     add_nginx_mantainers_pgp_keys 2>&1 | indent
 
+    say "Downloading nginx and pcre source"
     curl "${nginx_url}.asc" -s -o nginx-source.tar.gz.asc
     curl $nginx_url -s -o nginx-source.tar.gz
+    curl -L http://sourceforge.net/projects/pcre/files/latest/download -s -o pcre-latest.tar
 
+    say "Verifying downloads"
+    # TODO: Verify pcre download
     verify_gpg "nginx-source.tar.gz.asc" 2>&1 | indent
+
+    pcre_dir_name=$(tar -tf pcre-latest.tar | head -n1 || echo '')
+    pcre_path="$nginx_source_dir/pcre-src/$pcre_dir_name"
 
     # Extract files and remove tarball & signature file
     tar xzf nginx-source.tar.gz -C $nginx_source_dir
+    tar xf pcre-latest.tar -C $nginx_source_dir/pcre-src
+
     rm nginx-source.tar.gz.asc
     rm nginx-source.tar.gz
+    rm pcre-latest.tar
   fi
 
   cd $nginx_source_dir/$nginx_filename
@@ -102,6 +113,7 @@ if [ $recompile == "yes" ]; then
     --with-http_ssl_module \
     --with-http_gzip_static_module \
     --with-http_addition_module \
+    --with-pcre=$pcre_path \
     $nginx_custom_modules 2>&1 | indent
 
   say "Running make"
