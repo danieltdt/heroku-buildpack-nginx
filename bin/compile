@@ -35,18 +35,20 @@ else
 fi
 
 recompile="no"
+should_cache_nginx="yes"
 nginx_filename="nginx-${nginx_version}"
 nginx_url="http://nginx.org/download/${nginx_filename}.tar.gz"
 nginx_source_dir="$cache_dir/nginx-src"
-nginx_install_dir="$build_dir/vendor/nginx"
-nginx_install_prefix="/app/vendor/nginx"
+nginx_install_path="vendor/nginx"
+nginx_install_dir="/app/$nginx_install_path"
 pcre_path="$nginx_source_dir/pcre-src"
 
 mkdir -p $nginx_source_dir
 rm -rf $nginx_install_dir; mkdir -p $nginx_install_dir
 
-if test -f $nginx_install_dir/sbin/nginx; then
-  say "Nginx found at '$nginx_install_dir'; Ignoring .nginx.version from nginx.json";
+if test -f "$build_dir/$nginx_install_path/sbin/nginx"; then
+  say "Nginx found at '$nginx_install_path'; Ignoring .nginx.version from nginx.json";
+  should_cache_nginx="no"
 else
   # Check nginx version
   if ! (test -f $cache_dir/nginx-version && [ $(cat $cache_dir/nginx-version) == "$nginx_version" ]); then
@@ -78,9 +80,15 @@ else
     echo -e $checksums > $modules_checksums
   fi
 
-  if ! test -f $cache_dir/nginx-compiled/sbin/nginx; then recompile="yes"; fi
+  if test -f $cache_dir/nginx-compiled/sbin/nginx; then
+    cp -r $cache_dir/nginx-compiled/* $nginx_install_dir
+  else
+    recompile="yes";
+  fi
 
   if [ $recompile == "yes" ]; then
+    say "Start recompiling"
+
     # Download, compile & install nginx from nginx.org
     if test -d $nginx_source_dir/$nginx_filename/src; then
       say "Found source on cache; skipping download"
@@ -114,7 +122,7 @@ else
 
     cd $nginx_source_dir/$nginx_filename
     say "Running configure"
-    ./configure --prefix=$nginx_install_prefix \
+    ./configure --prefix=$nginx_install_dir \
       --with-http_ssl_module \
       --with-http_gzip_static_module \
       --with-http_addition_module \
@@ -149,15 +157,16 @@ else
   fi
 fi
 
-cp $bp_dir/bin/compile_annotations $build_dir/vendor/nginx/sbin
-
 say "Building runtime environment"
 mkdir -p $build_dir/.profile.d
 echo "export PATH=\"\$HOME/vendor/nginx/sbin:\$PATH\";" > $build_dir/.profile.d/nginx.sh
 
-say "Recrating cache files"
-rm -rf "$cache_dir/nginx-compiled"
-cp -r $nginx_install_dir "$cache_dir/nginx-compiled"
+if [ $should_cache_nginx == "yes" ]; then
+  say "Recrating cache files"
+  rm -rf "$cache_dir/nginx-compiled"
+  mkdir -p "$cache_dir/nginx-compiled"
+  cp -r $nginx_install_dir/* "$cache_dir/nginx-compiled"
+fi
 
 # Copying default nginx.conf
 if [ ! -e $build_dir/nginx.conf ]; then
@@ -165,3 +174,13 @@ if [ ! -e $build_dir/nginx.conf ]; then
   protip "Create your own nginx.conf file with your server configurations"
   cp $nginx_install_dir/conf/nginx.conf $build_dir/nginx.conf
 fi
+
+if [ $should_cache_nginx == "yes" ]; then
+  say "Moving nginx to build dir"
+  rm -rf "$build_dir/$nginx_install_path"; mkdir -p "$build_dir/$nginx_install_path"
+  cp -r $nginx_install_dir/* "$build_dir/$nginx_install_path"
+  rm -rf $nginx_install_dir
+fi
+
+cp $bp_dir/bin/compile_annotations $build_dir/$nginx_install_path/sbin
+
