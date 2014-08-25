@@ -39,6 +39,7 @@ nginx_filename="nginx-${nginx_version}"
 nginx_url="http://nginx.org/download/${nginx_filename}.tar.gz"
 nginx_source_dir="$cache_dir/nginx-src"
 nginx_install_dir="$build_dir/vendor/nginx"
+nginx_install_prefix="/app/vendor/nginx"
 pcre_path="$nginx_source_dir/pcre-src"
 
 mkdir -p $nginx_source_dir
@@ -113,7 +114,7 @@ else
 
     cd $nginx_source_dir/$nginx_filename
     say "Running configure"
-    ./configure --prefix=$nginx_install_dir \
+    ./configure --prefix=$nginx_install_prefix \
       --with-http_ssl_module \
       --with-http_gzip_static_module \
       --with-http_addition_module \
