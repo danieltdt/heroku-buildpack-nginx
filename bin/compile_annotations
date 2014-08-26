@@ -9,7 +9,7 @@ GREP_OPTIONS=''
 mkdir -p ./tmp
 cp nginx.conf tmp/nginx.conf
 
-grep_replace_with_env='heroku:replace_with_env:(.+):(.+)\s*'
+grep_replace_with_env='heroku:replace_with_env:(.+):(.+)?\s*'
 \egrep -n -A1 -Z "$grep_replace_with_env" nginx.conf | while read -r annotation; do
   read -r line;
   read -r separator || separator='';
@@ -19,14 +19,15 @@ grep_replace_with_env='heroku:replace_with_env:(.+):(.+)\s*'
 
   let "line_number += 1"
 
-  sed_replace_with_env='heroku:replace_with_env:\(.\+\):\(.\+\)\s*';
+  sed_replace_with_env='heroku:replace_with_env:\(.\+\):\(.\+\)\?\s*';
   placeholder=$(echo "$annotation" | sed "s/$sed_replace_with_env/\\1/")
   value=$(echo "$annotation" | sed "s/$sed_replace_with_env/\\2/")
 
-  sed -i "${line_number}s/$placeholder/$(eval echo \$$value)/" tmp/nginx.conf
+  new_value=$(eval echo \$$value)
+  sed -i "${line_number//\//\\/}s/${placeholder//\//\\/}/${new_value//\//\\/}/" tmp/nginx.conf
 done
 
-grep_replace='heroku:replace:(.+):(.+)\s*'
+grep_replace='heroku:replace:(.+):(.+)?\s*'
 \egrep -n -A1 -Z "$grep_replace" nginx.conf | while read -r annotation; do
   read -r line;
   read -r separator || separator='';
@@ -36,11 +37,11 @@ grep_replace='heroku:replace:(.+):(.+)\s*'
 
   let "line_number += 1"
 
-  sed_replace='heroku:replace:\(.\+\):\(.\+\)\s*';
+  sed_replace='heroku:replace:\(.\+\):\(.\+\)\?\s*';
   placeholder=$(echo "$annotation" | sed "s/$sed_replace/\\1/")
   value=$(echo "$annotation" | sed "s/$sed_replace/\\2/")
 
-  sed -i "${line_number}s/$placeholder/$value/" tmp/nginx.conf
+  sed -i "${line_number//\//\\/}s/${placeholder//\//\\/}/${value//\//\\/}/" tmp/nginx.conf
 done
 
 mv tmp/nginx.conf vendor/nginx/conf
