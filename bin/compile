@@ -175,6 +175,11 @@ if [ ! -e $build_dir/nginx.conf ]; then
   cp $nginx_install_dir/conf/nginx.conf $build_dir/nginx.conf
 fi
 
+say "Placing conf.d files"
+if test -d $build_dir/conf.d; then
+  cp -r $build_dir/conf.d/* $nginx_install_dir/conf.d/
+fi
+
 if [ $should_cache_nginx == "yes" ]; then
   say "Moving nginx to build dir"
   rm -rf "$build_dir/$nginx_install_path"; mkdir -p "$build_dir/$nginx_install_path"
