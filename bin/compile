@@ -123,6 +123,7 @@ else
     cd $nginx_source_dir/$nginx_filename
     say "Running configure"
     ./configure --prefix=$nginx_install_dir \
+      --conf-path=$nginx_install_dir/conf/nginx.conf \
       --with-http_ssl_module \
       --with-http_gzip_static_module \
       --with-http_addition_module \
@@ -138,9 +139,9 @@ else
     echo $nginx_version > $cache_dir/nginx-version
 
     say "Copying nginx custom config files"
-    mkdir -p $nginx_install_dir/conf.d
+    mkdir -p $nginx_install_dir/conf/conf.d
     if [ "$(ls -A $bp_dir/conf/*.conf 2> /dev/null)" ]; then
-      cp -r $bp_dir/conf/* $nginx_install_dir/conf.d/
+      cp -r $bp_dir/conf/* $nginx_install_dir/conf/conf.d/
     fi
 
     # Disable daemon
@@ -177,7 +178,7 @@ fi
 
 say "Placing conf.d files"
 if test -d $build_dir/conf.d; then
-  cp -r $build_dir/conf.d/* $nginx_install_dir/conf.d/
+  cp -r $build_dir/conf.d/* $nginx_install_dir/conf/conf.d/
 fi
 
 if [ $should_cache_nginx == "yes" ]; then
