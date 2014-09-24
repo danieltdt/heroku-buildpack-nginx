@@ -12,13 +12,15 @@ env_dir=$3
 bp_dir=$(cd $(dirname $0); cd ..; pwd)
 
 source $bp_dir/bin/common.sh
+source $bp_dir/bin/dependencies.sh
 
-semver_range=$(cat $build_dir/nginx.json | $bp_dir/vendor/jq -r .nginx.version)
+# Resolve nginx version
+semver_range=$(cat $build_dir/app.json | $bp_dir/vendor/jq -r .engines.nginx.version)
 nginx_version=$(curl --silent --get --data-urlencode "range=${semver_range}" https://semver.io/nginx/resolve)
 
 # Recommend using semver ranges in a safe manner
 if [ "$semver_range" == "null" ]; then
-  protip "Specify a nginx version in nginx.json"
+  protip "Specify a nginx version in app.json"
   semver_range=""
 elif [ "$semver_range" == "*" ]; then
   protip "Avoid using semver ranges like '*' in nginx.version"
@@ -34,20 +36,23 @@ else
   say "Resolved nginx version: $nginx_version"
 fi
 
+ROOT=/app
 recompile="no"
 should_cache_nginx="yes"
 nginx_filename="nginx-${nginx_version}"
 nginx_url="http://nginx.org/download/${nginx_filename}.tar.gz"
 nginx_source_dir="$cache_dir/nginx-src"
 nginx_install_path="vendor/nginx"
-nginx_install_dir="/app/$nginx_install_path"
-pcre_path="$nginx_source_dir/pcre-src"
+nginx_install_dir="$ROOT/$nginx_install_path"
+
+# Install dependencies
+install_dependencies $build_dir/app.json
 
 mkdir -p $nginx_source_dir
 rm -rf $nginx_install_dir; mkdir -p $nginx_install_dir
 
 if test -f "$build_dir/$nginx_install_path/sbin/nginx"; then
-  say "Nginx found at '$nginx_install_path'; Ignoring .nginx.version from nginx.json";
+  say "Nginx found at '$nginx_install_path'; Ignoring .engines.nginx.version from app.json";
   should_cache_nginx="no"
 else
   # Check nginx version
@@ -62,23 +67,28 @@ else
     modules_checksums=$nginx_source_dir/modules-checksums
     checksums=""
 
-    find $build_dir/modules/*.tar.gz -maxdepth 1 -type f -print0 2> /dev/null || echo '' | \
-    while read -r -d '' module_filename; do
+    rm -rf $cache_dir/modules
+    mkdir -p $cache_dir/modules
+    for module_filename in $build_dir/modules/*.tar.gz; do
       md5="$(md5sum $module_filename)"
       checksums="$md5\n$checksums"
+      module_dir_name=$(tar -tf $module_filename | head -n1 || echo '' > /dev/null)
 
-      grep "$md5" $modules_checksums 2> /dev/null
-      if [ $? -ne 0 ]; then
-        if [ recompile == "no" ]; then say "New modules detected; recompiling nginx"; fi
+      tar xzf $module_filename -C $cache_dir/
+      nginx_custom_modules="$nginx_custom_modules --add-module=$cache_dir/$module_dir_name"
+
+      if [[ $modules_checksums == *$md5*  ]]; then
+        if [ $recompile == "no" ]; then say "New modules detected"; fi
         recompile="yes"
-        say "Adding module '$(basename $module_filename)' to modules-to-compile list"
-        nginx_custom_modules="$nginx_custom_modules --add-module=$module_filename"
       fi
     done
 
     # rewrite module-checksums file
     echo -e $checksums > $modules_checksums
   fi
+
+  # clear "--add-module" if no recompile is needed
+  [ $recompile == "no" ] && nginx_custom_modules=''
 
   if test -f $cache_dir/nginx-compiled/sbin/nginx; then
     cp -r $cache_dir/nginx-compiled/* $nginx_install_dir
@@ -99,25 +109,31 @@ else
       say "Adding nginx mainteners keys to gpg"
       add_nginx_mantainers_pgp_keys 2>&1 | indent
 
-      say "Downloading nginx and pcre source"
-      curl "${nginx_url}.asc" -s -o nginx-source.tar.gz.asc
-      curl $nginx_url -s -o nginx-source.tar.gz
-      curl -L http://sourceforge.net/projects/pcre/files/latest/download -s -o pcre-latest.tar
+      pcre_path=$(find $ROOT/vendor/ -maxdepth 1 -name 'pcre*' -print -quit)
+      if test -n "$pcre_path"; then
+        echo "PCRE installed as dependency";
+      else
+        pcre_path="$nginx_source_dir/pcre-src"
+        say "Downloading nginx and pcre source"
+        curl "${nginx_url}.asc" -s -o nginx-source.tar.gz.asc
+        curl $nginx_url -s -o nginx-source.tar.gz
+        curl -L http://sourceforge.net/projects/pcre/files/latest/download -s -o pcre-latest.tar
 
-      say "Verifying downloads"
-      # TODO: Verify pcre download
-      verify_gpg "nginx-source.tar.gz.asc" 2>&1 | indent
+        say "Verifying downloads"
+        # TODO: Verify pcre download
+        verify_gpg "nginx-source.tar.gz.asc" 2>&1 | indent
 
-      pcre_dir_name=$(tar -tf pcre-latest.tar | head -n1 || echo '' > /dev/null)
+        pcre_dir_name=$(tar -tf pcre-latest.tar | head -n1 || echo '' > /dev/null)
 
-      # Extract files and remove tarball & signature file
-      tar xzf nginx-source.tar.gz -C $nginx_source_dir
-      tar xf pcre-latest.tar -C .
-      mv "./$pcre_dir_name" "$pcre_path"
+        # Extract files and remove tarball & signature file
+        tar xzf nginx-source.tar.gz -C $nginx_source_dir
+        tar xf pcre-latest.tar -C .
+        mv "./$pcre_dir_name" "$pcre_path"
 
-      rm nginx-source.tar.gz.asc
-      rm nginx-source.tar.gz
-      rm pcre-latest.tar
+        rm nginx-source.tar.gz.asc
+        rm nginx-source.tar.gz
+        rm pcre-latest.tar
+      fi
     fi
 
     cd $nginx_source_dir/$nginx_filename
@@ -181,6 +197,9 @@ if test -d $build_dir/conf.d; then
   cp -r $build_dir/conf.d/* $nginx_install_dir/conf/conf.d/
 fi
 
+run_postdeploy_scripts $build_dir/app.json
+
+say "Cleaning env"
 if [ $should_cache_nginx == "yes" ]; then
   say "Moving nginx to build dir"
   rm -rf "$build_dir/$nginx_install_path"; mkdir -p "$build_dir/$nginx_install_path"

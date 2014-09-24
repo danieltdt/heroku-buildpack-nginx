@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # bin/detect <build-dir>
 
-if [ -f $1/nginx.json ]; then
+bp_dir=$(cd $(dirname $0); cd ..; pwd)
+has_nginx=$(cat $1/app.json 2>/dev/null | $bp_dir/vendor/jq -r '.engines.nginx')
+
+if [[ "x$has_nginx" != "x" && "x$has_nginx" != "xnull" ]]; then
   echo "Nginx Web Server"
   exit 0
 else

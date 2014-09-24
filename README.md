@@ -3,9 +3,10 @@ Heroku buildpack for Nginx
 
 ## How it works?
 
-* Installs the .nginx.version specified in your `nginx.json`.
+* Installs the .engines.nginx.version specified in your `app.json`.
+* Download and install dependencies defined at .dependencies in your `app.json`
 * Compiles nginx with your modules from your `/modules` folder.
-* Automatically recompile nginx and modules if modifications are detected.
+* Automatically recompile nginx with modules if modifications are detected.
 * Caches nginx source code for faster deploy.
 
 ### Running on heroku
@@ -22,6 +23,7 @@ error_log stderr; # Optional, but high recommend
 html {
   # Uncomment the line below if you want to enable custom configs from this buildpack
   # include conf.d/*.conf;
+
   # ...
   server {
     # ...
@@ -36,7 +38,8 @@ html {
 ```
 
 When you start your app, the init script will:
+
 * Read your `nginx.conf`.
 * Execute all annotations.
 * Save the new config file.
-* Run Nginx with this config.
+* Run Nginx with the new config file.
