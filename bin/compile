@@ -106,6 +106,7 @@ else
       rm -rf $nginx_cache_source
       mkdir -p $nginx_cache_source
 
+      # FIXME: Include keys on buildpack and check the files
       say "Adding nginx mainteners keys to gpg"
       add_nginx_mantainers_pgp_keys 2>&1 | indent
 
@@ -119,6 +120,22 @@ else
       rm nginx-source.tar.gz.asc
       rm nginx-source.tar.gz
     fi
+
+    set -x
+    # Check nginx modules
+    nginx_modules_arg=''
+    for module in $build_dir/modules/* $ROOT/modules/*; do
+      [[ ! -d $module ]] && continue
+
+      # if no config file found, search inner directories
+      if [[ ! -f $module/config ]]; then
+        for submodule in $module/*; do
+          nginx_modules_arg="$nginx_modules_arg --add-module=$submodule"
+        done
+      else
+        nginx_modules_arg="$nginx_modules_arg --add-module=$module"
+      fi
+    done
 
     # get PCRE
     pcre_path=''
@@ -152,7 +169,8 @@ else
       --with-http_gzip_static_module \
       --with-http_addition_module \
       --with-pcre=$pcre_path \
-      $nginx_custom_modules 2>&1 | indent
+      $nginx_modules_arg 2>&1 | indent
+    set +x
 
     say "Running make"
     make 2>&1 | indent
