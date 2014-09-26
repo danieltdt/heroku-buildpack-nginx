@@ -85,7 +85,7 @@ if test -f "$build_dir/$nginx_path/sbin/nginx"; then
 else
   # Check cached nginx version
   cached_nginx_version=$(cat $nginx_cache/version 2> /dev/null || echo '')
-  if [ $cached_nginx_version == $nginx_version ] && [ -f $nginx_cache_compiled/sbin/nginx ]; then
+  if [ "$cached_nginx_version" == $nginx_version ] && [ -f $nginx_cache_compiled/sbin/nginx ]; then
     say "Nginx found on cache"
     cp -r $nginx_cache_compiled/* $nginx_prefix
   else
@@ -129,9 +129,11 @@ else
       # if no config file found, search inner directories
       if [[ ! -f $module/config ]]; then
         for submodule in $module/*; do
+          echo $nginx_modules_arg | \grep -q $submodule && continue
           nginx_modules_arg="$nginx_modules_arg --add-module=$submodule"
         done
       else
+        echo $nginx_modules_arg | \grep -q $module && continue
         nginx_modules_arg="$nginx_modules_arg --add-module=$module"
       fi
     done
