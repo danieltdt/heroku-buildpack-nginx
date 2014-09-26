@@ -3,16 +3,23 @@
 jq="$(cd $(dirname $0); cd ..; pwd)/vendor/jq"
 
 ROOT=${ROOT:-/app}
+DEPENDENCIES_CACHE_DIR=${DEPENDENCIES_CACHE_DIR:?DEPENDENCIES_CACHE_DIR is not defined!}
+
+# Create metadata folder
+mkdir -p "$DEPENDENCIES_CACHE_DIR"
 
 assert_json_value() {
-  if [[ "x$1" == "x" || "x$1" == "xnull" ]]; then
+  # assert_json_value <json-or-value> <error-message>
+  if [ "x$1" == "x" ] || [ "x$1" == "xnull" ]; then
     echo $2 >&2
     exit 1
   fi
 }
 
 extract_dependency_file() {
-  # extract <compressed-file> <location>
+  # extract_dependency_file <compressed-file> <location>
+  rm -rf $2
+  mkdir -p $2
   case "$1" in
     *.tar.gz)  tar xzf $1 -C $2 ;;
     *.tgz)     tar xzf $1 -C $2 ;;
@@ -26,67 +33,107 @@ extract_dependency_file() {
 }
 
 install_dependency() {
-  local name=    $(echo $1 | $jq -r '.name')
-  local md5=     $(echo $1 | $jq -r '.md5')
-  local url=     $(echo $1 | $jq -r '.url')
-  local path=    $(echo $1 | $jq -r '.path')
-  local install= $(echo $1 | $jq -r '.install')
+  local name=$(echo "$*"     | $jq -c -r '.name')
+  local md5=$(echo "$*"      | $jq -c -r '.md5')
+  local url=$(echo "$*"      | $jq -c -r '.url')
+  local dep_root=$(echo "$*" | $jq -c -r '.dependency_root // ""')
+  local path="$(echo "$*"    | $jq -c -r '.path // "/vendor"')/$name"
+  local install="$(echo "$*" | $jq -c -r '.install')"
+
+  local extract_dir="${ROOT%/}/${path#/}"
+  local checksum="$md5 $name"
 
   assert_json_value $name ".name is required"
   assert_json_value $md5  ".md5 is required"
   assert_json_value $url  ".url is required"
-  assert_json_value $path ".path is required"
 
-  # Download
-  curl -L $url -s -o $name
+  # Create cache dir (if not exists)
+  mkdir -p "$DEPENDENCIES_CACHE_DIR/$name"
 
-  # Check download
-  echo "$md5 $name" | md5sum --check --quiet --status -
-  if [[ $? -ne 0 ]]; then
-    echo "md5 did not match; exiting" >&2
-    exit 1
+  # Check if already installed
+  local is_cached='no'
+  local cached_checksum=$(cat "$DEPENDENCIES_CACHE_DIR/$name/checksum" 2> /dev/null | head -n1)
+  if [[ $cached_checksum == $checksum ]]; then
+    echo "  $name is cached"
+    is_cached='yes'
+  else
+    echo "  $name not cached; downloading"
+    rm -f "$DEPENDENCIES_CACHE_DIR/$name/checksum"
   fi
 
-  # Extract
-  extract_dependency_file "$name" "$ROOT/$path"
+  if [[ $is_cached == 'no' ]]; then
+    # Download
+    curl -L $url -s -o $name
 
-  # Install
-  if [[ "x$install" != "x" && "x$install" != "xnull" ]]; then
-    echo "Installing $name"
-    echo $install
-    (cd $ROOT/$path; $install)
+    # Check download
+    echo $checksum | md5sum --check --quiet --status -
+    if [[ $? -ne 0 ]]; then
+      echo "Checksum md5 did not match; exiting" >&2
+      exit 1
+    fi
+    echo "  Checksum OK"
+
+    # Extract
+    extract_dependency_file "$name" "$extract_dir"
+
+    # Get extracted root dir
+    local extracted_root_dir=''
+    if [[ "x$dep_root" == "x" ]]; then
+      extracted_root_dir=$(find ${extract_dir%/}/* -maxdepth 0 -type d | head -n1)
+    else
+      extracted_root_dir="${extract_dir%/}/${dep_root#/}"
+    fi
+
+    # Install
+    if [ "x$install" != "x" ] && [ "x$install" != "xnull" ]; then
+      echo "Installing $name"
+      echo "  $install"
+      (cd "$extracted_root_dir"; THIS="$extracted_root_dir" eval "${install[@]}")
+    fi
+
+    # Remove downloaded file
+    rm $name
   fi
 
-  # Remove downloaded file
-  rm $name
+  # Save installed metada
+  echo $checksum > "$DEPENDENCIES_CACHE_DIR/$name/checksum"
+  echo $extracted_root_dir > "$DEPENDENCIES_CACHE_DIR/$name/root-path"
 }
 
 run_postdeploy_script() {
-  local name=   $(echo $1 | $jq -r '.name')
-  local path=   $(echo $1 | $jq -r '.path')
-  local script= $(echo $1 | $jq -r 'postdeploy')
+  local name=${1:?dependency name is required}
+  local script="${*:2}"
 
-  assert_json_value $name ".name is required"
-  if [[ ! -d "$path" ]]; then
-    echo "Dependency not installed" >&2
+  if [[ ! -d "$DEPENDENCIES_CACHE_DIR/$name" ]]; then
+    echo "Dependency not installed; exiting" >&2
     exit 1
   fi
 
-  if [[ "x$script" != "x" && "x$script" != "xnull" ]]; then
-    echo "Postdeploy $name"
-    echo $script
-    (cd $ROOT/$path; $script)
-  fi
+  local extracted_root_dir=$(cat $DEPENDENCIES_CACHE_DIR/$name/root-path)
+
+  echo "Postdeploy $name"
+  echo "  $script"
+  (cd $extracted_root_dir; THIS="$extracted_root_dir" eval "${script[@]}")
+}
+
+get_installed_path() {
+  local name=${1:?dependency name is required}
+
+  echo $(cat "$DEPENDENCIES_CACHE_DIR/$name/root-path")
 }
 
 install_dependencies() {
   while read -r dep_json; do
     install_dependency $dep_json
-  done < <( cat $1 | $jq -r '.dependencies[]')
+  done < <( cat $1 | $jq -c -r '.dependencies // [] | .[]')
 }
 
 run_postdeploy_scripts() {
   while read -r dep_json; do
-    run_postdeploy_script $dep_json
-  done < <( cat $1 | $jq -r '.dependencies[]')
+    if [ "x$(echo $dep_json | $jq -c -r '.postdeploy // ""')" == "x" ]; then
+      continue
+    fi
+
+    run_postdeploy_script $(echo $dep_json | $jq -c -r '[.name, .postdeploy] | join(" ")')
+  done < <( cat $1 | $jq -c -r '.dependencies // [] | .[]')
 }

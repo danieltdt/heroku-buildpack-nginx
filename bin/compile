@@ -12,10 +12,24 @@ env_dir=$3
 bp_dir=$(cd $(dirname $0); cd ..; pwd)
 
 source $bp_dir/bin/common.sh
+
+# Load app env vars
+export_env_dir $env_dir
+
+# Defaults app path to heroku default app path
+app_path=${APP_PATH:-/app}
+
+# Clear app dir
+rm -rf "$app_path/*"
+
+# Set config vars for dependencies.sh
+ROOT=${ROOT:-"$app_path"}
+DEPENDENCIES_CACHE_DIR=${DEPENDENCIES_CACHE_DIR:-"$cache_dir/.dependencies-cache"}
+
 source $bp_dir/bin/dependencies.sh
 
 # Resolve nginx version
-semver_range=$(cat $build_dir/app.json | $bp_dir/vendor/jq -r .engines.nginx.version)
+semver_range=$(cat $build_dir/app.json | $bp_dir/vendor/jq -r .engines.nginx)
 nginx_version=$(curl --silent --get --data-urlencode "range=${semver_range}" https://semver.io/nginx/resolve)
 
 # Recommend using semver ranges in a safe manner
@@ -23,9 +37,9 @@ if [ "$semver_range" == "null" ]; then
   protip "Specify a nginx version in app.json"
   semver_range=""
 elif [ "$semver_range" == "*" ]; then
-  protip "Avoid using semver ranges like '*' in nginx.version"
+  protip "Avoid using semver ranges like '*' in .engines.nginx"
 elif [ ${semver_range:0:1} == ">" ]; then
-  protip "Avoid using semver ranges starting with '>' in nginx.version"
+  protip "Avoid using semver ranges starting with '>' in .engines.nginx"
 fi
 
 # Output info about requested range and resolved nginx version
@@ -36,110 +50,104 @@ else
   say "Resolved nginx version: $nginx_version"
 fi
 
-ROOT=/app
 recompile="no"
 should_cache_nginx="yes"
+using_custom_nginx="no"
+
 nginx_filename="nginx-${nginx_version}"
 nginx_url="http://nginx.org/download/${nginx_filename}.tar.gz"
-nginx_source_dir="$cache_dir/nginx-src"
-nginx_install_path="vendor/nginx"
-nginx_install_dir="$ROOT/$nginx_install_path"
+
+nginx_cache="$cache_dir/nginx"
+nginx_cache_source="$nginx_cache/source"
+nginx_cache_compiled="$nginx_cache/compiled"
+nginx_path="vendor/nginx"
+nginx_prefix="$app_path/$nginx_path"
 
 # Install dependencies
-install_dependencies $build_dir/app.json
+say "Installing dependencies"
+install_dependencies $build_dir/app.json | indent
 
-mkdir -p $nginx_source_dir
-rm -rf $nginx_install_dir; mkdir -p $nginx_install_dir
+# Prepare environment
+mkdir -p $nginx_cache
+mkdir -p $nginx_cache_source
+mkdir -p $nginx_cache_compiled
+rm -rf $nginx_prefix
+mkdir -p $nginx_prefix
 
-if test -f "$build_dir/$nginx_install_path/sbin/nginx"; then
-  say "Nginx found at '$nginx_install_path'; Ignoring .engines.nginx.version from app.json";
+# Check if nginx is on slug
+if test -f "$build_dir/$nginx_path/sbin/nginx"; then
+  say "Nginx found at '$nginx_path'; No download/compile is needed";
   should_cache_nginx="no"
+  recompile="no"
+  using_custom_nginx="yes"
+
+  cp -r $build_dir/$nginx_path/* $nginx_prefix
 else
-  # Check nginx version
-  if ! (test -f $cache_dir/nginx-version && [ $(cat $cache_dir/nginx-version) == "$nginx_version" ]); then
-    recompile="yes"
-    say "Nginx version changed since last build; recompiling the new version"
-  fi
-
-  # Check nginx modules
-  nginx_custom_modules=""
-  if test -d $build_dir/modules; then
-    modules_checksums=$nginx_source_dir/modules-checksums
-    checksums=""
-
-    rm -rf $cache_dir/modules
-    mkdir -p $cache_dir/modules
-    for module_filename in $build_dir/modules/*.tar.gz; do
-      md5="$(md5sum $module_filename)"
-      checksums="$md5\n$checksums"
-      module_dir_name=$(tar -tf $module_filename | head -n1 || echo '' > /dev/null)
-
-      tar xzf $module_filename -C $cache_dir/
-      nginx_custom_modules="$nginx_custom_modules --add-module=$cache_dir/$module_dir_name"
-
-      if [[ $modules_checksums == *$md5*  ]]; then
-        if [ $recompile == "no" ]; then say "New modules detected"; fi
-        recompile="yes"
-      fi
-    done
-
-    # rewrite module-checksums file
-    echo -e $checksums > $modules_checksums
-  fi
-
-  # clear "--add-module" if no recompile is needed
-  [ $recompile == "no" ] && nginx_custom_modules=''
-
-  if test -f $cache_dir/nginx-compiled/sbin/nginx; then
-    cp -r $cache_dir/nginx-compiled/* $nginx_install_dir
+  # Check cached nginx version
+  cached_nginx_version=$(cat $nginx_cache/version 2> /dev/null || echo '')
+  if [ $cached_nginx_version == $nginx_version ] && [ -f $nginx_cache_compiled/sbin/nginx ]; then
+    say "Nginx found on cache"
+    cp -r $nginx_cache_compiled/* $nginx_prefix
   else
-    recompile="yes";
+    recompile="yes"
+    say "Nginx version changed or not cached; recompiling"
+    rm -f $nginx_cache/version;
+    rm -rf $nginx_cache_compiled;
   fi
 
   if [ $recompile == "yes" ]; then
     say "Start recompiling"
 
-    # Download, compile & install nginx from nginx.org
-    if test -d $nginx_source_dir/$nginx_filename/src; then
+    # Download nginx from nginx.org
+    if test -d $nginx_cache_source/$nginx_filename/src; then
       say "Found source on cache; skipping download"
     else
-      rm -rf $nginx_source_dir
-      mkdir -p $nginx_source_dir
+      # Download nginx
+      rm -rf $nginx_cache_source
+      mkdir -p $nginx_cache_source
 
       say "Adding nginx mainteners keys to gpg"
       add_nginx_mantainers_pgp_keys 2>&1 | indent
 
-      pcre_path=$(find $ROOT/vendor/ -maxdepth 1 -name 'pcre*' -print -quit)
-      if test -n "$pcre_path"; then
-        echo "PCRE installed as dependency";
-      else
-        pcre_path="$nginx_source_dir/pcre-src"
-        say "Downloading nginx and pcre source"
-        curl "${nginx_url}.asc" -s -o nginx-source.tar.gz.asc
-        curl $nginx_url -s -o nginx-source.tar.gz
-        curl -L http://sourceforge.net/projects/pcre/files/latest/download -s -o pcre-latest.tar
+      say "Verifying downloads"
+      curl "${nginx_url}.asc" -s -o nginx-source.tar.gz.asc
+      curl $nginx_url -s -o nginx-source.tar.gz
+      verify_gpg "nginx-source.tar.gz.asc" 2>&1 | indent
 
-        say "Verifying downloads"
-        # TODO: Verify pcre download
-        verify_gpg "nginx-source.tar.gz.asc" 2>&1 | indent
+      tar xzf nginx-source.tar.gz -C $nginx_cache_source
 
-        pcre_dir_name=$(tar -tf pcre-latest.tar | head -n1 || echo '' > /dev/null)
-
-        # Extract files and remove tarball & signature file
-        tar xzf nginx-source.tar.gz -C $nginx_source_dir
-        tar xf pcre-latest.tar -C .
-        mv "./$pcre_dir_name" "$pcre_path"
-
-        rm nginx-source.tar.gz.asc
-        rm nginx-source.tar.gz
-        rm pcre-latest.tar
-      fi
+      rm nginx-source.tar.gz.asc
+      rm nginx-source.tar.gz
     fi
 
-    cd $nginx_source_dir/$nginx_filename
+    # get PCRE
+    pcre_path=''
+    # Check if PCRE_PATH is defined
+    if [[ -n $PCRE_PATH ]]; then
+      echo "PCRE_PATH is declared; using it to compile" | indent
+      pcre_path="$PCRE_PATH"
+    elif [ -z $IGNORE_PCRE_CACHE ] && [ -d "$nginx_cache_source"/pcre-src/pcre* ]; then
+      echo "PCRE found on cache; using it to compile" | indent
+      pcre_path=$(echo "$nginx_cache_source"/pcre-src/pcre*)
+    else
+      say "Downloading PCRE source"
+      curl -L http://sourceforge.net/projects/pcre/files/latest/download -s -o pcre-latest.tar
+      # TODO: Verify pcre download
+
+      pcre_dir_name=$(tar tf pcre-latest.tar | head -n1 || echo '' > /dev/null)
+      pcre_path="$nginx_cache_source/pcre-src/$pcre_dir_name"
+
+      # Extract
+      mkdir -p "$nginx_cache_source/pcre-src"
+      tar xf pcre-latest.tar -C "$nginx_cache_source/pcre-src"
+      rm pcre-latest.tar
+    fi
+
+    # Compile & install
+    cd $nginx_cache_source/$nginx_filename
     say "Running configure"
-    ./configure --prefix=$nginx_install_dir \
-      --conf-path=$nginx_install_dir/conf/nginx.conf \
+    ./configure --prefix=$nginx_prefix \
+      --conf-path=$nginx_prefix/conf/nginx.conf \
       --with-http_ssl_module \
       --with-http_gzip_static_module \
       --with-http_addition_module \
@@ -151,26 +159,31 @@ else
 
     say "Installing"
     make install 2>&1 | indent
-    chmod +x $nginx_install_dir/sbin/*
-    echo $nginx_version > $cache_dir/nginx-version
+    chmod +x $nginx_prefix/sbin/*
 
-    say "Copying nginx custom config files"
-    mkdir -p $nginx_install_dir/conf/conf.d
-    if [ "$(ls -A $bp_dir/conf/*.conf 2> /dev/null)" ]; then
-      cp -r $bp_dir/conf/* $nginx_install_dir/conf/conf.d/
+    # Cache installed version
+    echo $nginx_version > $nginx_cache/version
+
+    # Copy buildpack custom conf
+    say "Copying this buildpack custom config files"
+    mkdir -p $nginx_prefix/conf/conf.d
+    if ls -A $bp_dir/conf/*.conf 2> /dev/null; then
+      cp -r $bp_dir/conf/* $nginx_prefix/conf/conf.d/
     fi
 
+    # Add required config for heroku
+
     # Disable daemon
-    sed '/^http {/i# heroku:replace:on;:off;\ndaemon on;' $nginx_install_dir/conf/nginx.conf \
-      > $cache_dir/include-conf && mv $cache_dir/include-conf $nginx_install_dir/conf/nginx.conf
+    sed '/^http {/i# heroku:replace:on;:off;\ndaemon on;' $nginx_prefix/conf/nginx.conf \
+      > $cache_dir/include-conf && mv $cache_dir/include-conf $nginx_prefix/conf/nginx.conf
 
     # Load conf.d files
-    sed '/^http {/ainclude conf.d/*.conf;' $nginx_install_dir/conf/nginx.conf \
-      > $cache_dir/include-conf && mv $cache_dir/include-conf $nginx_install_dir/conf/nginx.conf
+    sed '/^http {/ainclude conf.d/*.conf;' $nginx_prefix/conf/nginx.conf \
+      > $cache_dir/include-conf && mv $cache_dir/include-conf $nginx_prefix/conf/nginx.conf
 
     # Add heroku replace annotation
-    sed '/^\s*listen\s\+80/i# heroku:replace_with_env:80:PORT' $nginx_install_dir/conf/nginx.conf \
-      > $cache_dir/include-conf && mv $cache_dir/include-conf $nginx_install_dir/conf/nginx.conf
+    sed '/^\s*listen\s\+80/i# heroku:replace_with_env:80:PORT' $nginx_prefix/conf/nginx.conf \
+      > $cache_dir/include-conf && mv $cache_dir/include-conf $nginx_prefix/conf/nginx.conf
   fi
 fi
 
@@ -178,34 +191,44 @@ say "Building runtime environment"
 mkdir -p $build_dir/.profile.d
 echo "export PATH=\"\$HOME/vendor/nginx/sbin:\$PATH\";" > $build_dir/.profile.d/nginx.sh
 
+# Cache compiled nginx
 if [ $should_cache_nginx == "yes" ]; then
-  say "Recrating cache files"
-  rm -rf "$cache_dir/nginx-compiled"
-  mkdir -p "$cache_dir/nginx-compiled"
-  cp -r $nginx_install_dir/* "$cache_dir/nginx-compiled"
+  say "Recrating nginx cache files"
+  rm -rf "$nginx_cache_compiled"
+  mkdir -p "$nginx_cache_compiled"
+  cp -r $nginx_prefix/* "$nginx_cache_compiled"
 fi
 
 # Copying default nginx.conf
-if [ ! -e $build_dir/nginx.conf ]; then
-  say "No nginx.conf found; using default"
-  protip "Create your own nginx.conf file with your server configurations"
-  cp $nginx_install_dir/conf/nginx.conf $build_dir/nginx.conf
+if [ $using_custom_nginx == "no" ]; then
+  if [[ ! -e $build_dir/nginx.conf ]] ; then
+    say "No nginx.conf found; using default"
+    protip "Create your own nginx.conf file with your server configurations"
+  else
+    say "Coping nginx.conf"
+    cp $build_dir/nginx.conf $nginx_prefix/conf/nginx.conf
+  fi
 fi
 
 say "Placing conf.d files"
-if test -d $build_dir/conf.d; then
-  cp -r $build_dir/conf.d/* $nginx_install_dir/conf/conf.d/
+if [[ -d $build_dir/conf.d ]]; then
+  cp -r $build_dir/conf.d/* $nginx_prefix/conf/conf.d/
 fi
 
-run_postdeploy_scripts $build_dir/app.json
+say "Running dependencies postdeploy hook script"
+run_postdeploy_scripts $build_dir/app.json | indent
 
-say "Cleaning env"
+say "Copying installed dependencies to slug"
+cp -r $ROOT/* $build_dir
+
 if [ $should_cache_nginx == "yes" ]; then
-  say "Moving nginx to build dir"
-  rm -rf "$build_dir/$nginx_install_path"; mkdir -p "$build_dir/$nginx_install_path"
-  cp -r $nginx_install_dir/* "$build_dir/$nginx_install_path"
-  rm -rf $nginx_install_dir
+  say "Moving nginx to slug"
+  rm -rf "$build_dir/$nginx_path"; mkdir -p "$build_dir/$nginx_path"
+  cp -r $nginx_prefix/* "$build_dir/$nginx_path"
+  rm -rf $nginx_prefix
 fi
 
-cp $bp_dir/bin/compile_annotations $build_dir/$nginx_install_path/sbin
+say "Cleaning up env"
+rm -rf $app_path/*
 
+cp $bp_dir/bin/compile_annotations $build_dir/$nginx_path/sbin
