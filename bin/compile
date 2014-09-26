@@ -121,23 +121,6 @@ else
       rm nginx-source.tar.gz
     fi
 
-    # Check nginx modules
-    nginx_modules_arg=''
-    for module in $build_dir/modules/* $ROOT/modules/*; do
-      [[ ! -d $module ]] && continue
-
-      # if no config file found, search inner directories
-      if [[ ! -f $module/config ]]; then
-        for submodule in $module/*; do
-          echo $nginx_modules_arg | \grep -q $submodule && continue
-          nginx_modules_arg="$nginx_modules_arg --add-module=$submodule"
-        done
-      else
-        echo $nginx_modules_arg | \grep -q $module && continue
-        nginx_modules_arg="$nginx_modules_arg --add-module=$module"
-      fi
-    done
-
     # get PCRE
     pcre_path=''
     # Check if PCRE_PATH is defined
@@ -170,7 +153,7 @@ else
       --with-http_gzip_static_module \
       --with-http_addition_module \
       --with-pcre=$pcre_path \
-      $nginx_modules_arg 2>&1 | indent
+      $(add_module_option $build_dir/modules/* $ROOT/modules/*) 2>&1 | indent
 
     say "Running make"
     make 2>&1 | indent

@@ -34,7 +34,26 @@ add_nginx_mantainers_pgp_keys() {
   exit 1
 }
 
+add_module_option() {
+  # Check nginx modules
+  local nginx_modules_arg=''
+  for module in $@; do
+    [[ ! -d $module ]] && continue
 
+    # if no config file found, search inner directories
+    if [[ ! -f $module/config ]]; then
+      for submodule in $module/*; do
+        echo $nginx_modules_arg | \grep -q $submodule && continue
+        nginx_modules_arg="$nginx_modules_arg --add-module=$submodule"
+      done
+    else
+      echo $nginx_modules_arg | \grep -q $module && continue
+      nginx_modules_arg="$nginx_modules_arg --add-module=$module"
+    fi
+  done
+
+  echo $nginx_modules_arg
+}
 
 verify_gpg() {
   gpg --verify $1 || exit 1
