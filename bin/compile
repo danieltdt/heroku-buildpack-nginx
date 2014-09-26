@@ -121,7 +121,6 @@ else
       rm nginx-source.tar.gz
     fi
 
-    set -x
     # Check nginx modules
     nginx_modules_arg=''
     for module in $build_dir/modules/* $ROOT/modules/*; do
@@ -170,7 +169,6 @@ else
       --with-http_addition_module \
       --with-pcre=$pcre_path \
       $nginx_modules_arg 2>&1 | indent
-    set +x
 
     say "Running make"
     make 2>&1 | indent
