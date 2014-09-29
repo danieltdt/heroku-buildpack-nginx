@@ -58,10 +58,12 @@ install_dependency() {
     is_cached='yes'
   else
     echo "  $name not cached; downloading"
-    rm -f "$DEPENDENCIES_CACHE_DIR/$name/checksum"
+    rm -f "$DEPENDENCIES_CACHE_DIR/$name/*"
   fi
 
-  if [[ $is_cached == 'no' ]]; then
+  if [[ $is_cached == 'yes' ]]; then
+    cp "$DEPENDENCIES_CACHE_DIR/$name/$name" .
+  else
     # Download
     curl -L $url -s -o $name
 
@@ -72,32 +74,36 @@ install_dependency() {
       exit 1
     fi
     echo "  Checksum OK"
-
-    # Extract
-    extract_dependency_file "$name" "$extract_dir"
-
-    # Get extracted root dir
-    local extracted_root_dir=''
-    if [[ "x$dep_root" == "x" ]]; then
-      extracted_root_dir=$(find ${extract_dir%/}/* -maxdepth 0 -type d | head -n1)
-    else
-      extracted_root_dir="${extract_dir%/}/${dep_root#/}"
-    fi
-
-    # Install
-    if [ "x$install" != "x" ] && [ "x$install" != "xnull" ]; then
-      echo "Installing $name"
-      echo "  $install"
-      (cd "$extracted_root_dir"; THIS="$extracted_root_dir" eval "${install[@]}")
-    fi
-
-    # Remove downloaded file
-    rm $name
   fi
 
-  # Save installed metada
+  # Extract
+  extract_dependency_file "$name" "$extract_dir"
+
+  # Get extracted root dir
+  local extracted_root_dir=''
+  if [[ "x$dep_root" == "x" ]]; then
+    extracted_root_dir=$(find ${extract_dir%/}/* -maxdepth 0 -type d | head -n1)
+  else
+    extracted_root_dir="${extract_dir%/}/${dep_root#/}"
+  fi
+
+  # Install
+  if [ "x$install" != "x" ] && [ "x$install" != "xnull" ]; then
+    local THIS="$extracted_root_dir"
+    install=$(echo $install | sed -e "s#\$ROOT#$ROOT#g")
+    install=$(echo $install | sed -e "s#\$THIS#$THIS#g")
+    echo "Installing $name"
+    echo "  $install"
+    (cd "$extracted_root_dir"; eval ${install[*]})
+  fi
+
+  # Save installed dependency data & metadata
+  cp "$name" "$DEPENDENCIES_CACHE_DIR/$name/"
   echo $checksum > "$DEPENDENCIES_CACHE_DIR/$name/checksum"
   echo $extracted_root_dir > "$DEPENDENCIES_CACHE_DIR/$name/root-path"
+
+  # Remove downloaded file
+  rm $name
 }
 
 run_postdeploy_script() {
@@ -110,10 +116,12 @@ run_postdeploy_script() {
   fi
 
   local extracted_root_dir=$(cat $DEPENDENCIES_CACHE_DIR/$name/root-path)
-
+  local THIS="$extracted_root_dir"
+  script=$(echo $script | sed -e "s#\$ROOT#$ROOT#g")
+  script=$(echo $script | sed -e "s#\$THIS#$THIS#g")
   echo "Postdeploy $name"
   echo "  $script"
-  (cd $extracted_root_dir; THIS="$extracted_root_dir" eval "${script[@]}")
+  (cd $extracted_root_dir; eval ${script[*]})
 }
 
 get_installed_path() {
