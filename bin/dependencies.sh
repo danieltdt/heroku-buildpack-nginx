@@ -2,11 +2,12 @@
 
 jq=${jq:-"$(cd $(dirname $0); cd ..; pwd)/vendor/jq"}
 
-ROOT=${ROOT:-/app}
 DEPENDENCIES_CACHE_DIR=${DEPENDENCIES_CACHE_DIR:?DEPENDENCIES_CACHE_DIR is not defined!}
+ROOT=${ROOT:-$DEPENDENCIES_CACHE_DIR/files}
 
 # Create metadata folder
 mkdir -p "$DEPENDENCIES_CACHE_DIR"
+mkdir -p "$ROOT"
 
 assert_json_value() {
   # assert_json_value <json-or-value> <error-message>

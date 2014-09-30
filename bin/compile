@@ -16,24 +16,9 @@ source $bp_dir/bin/common.sh
 # Load app env vars
 export_env_dir $env_dir
 
-# Defaults app path to heroku default app path
-app_path=${APP_PATH:-/app}
-
-# Cache and clear app dir
-shopt -s dotglob
-
-pushd . > /dev/null
-cd "$app_path"
-tar czf "$cache_dir/app-cache.tar.gz" *
-popd > /dev/null
-
-rm -rf $app_path/*
-shopt -u dotglob
-
 # Set config vars for dependencies.sh
-ROOT=${ROOT:-"$app_path"}
+ROOT=$build_dir
 DEPENDENCIES_CACHE_DIR=${DEPENDENCIES_CACHE_DIR:-"$cache_dir/.dependencies-cache"}
-
 source $bp_dir/bin/dependencies.sh
 
 # Resolve nginx version
@@ -69,7 +54,7 @@ nginx_cache="$cache_dir/nginx"
 nginx_cache_source="$nginx_cache/source"
 nginx_cache_compiled="$nginx_cache/compiled"
 nginx_path="vendor/nginx"
-nginx_prefix="$app_path/$nginx_path"
+nginx_prefix="/app/$nginx_path"
 
 # Install dependencies
 say "Installing dependencies"
@@ -162,7 +147,7 @@ else
       --with-http_addition_module \
       --with-pcre=$pcre_path \
       $(get_configure_opts $build_dir/app.json) \
-      $(add_module_option $build_dir/modules/* $ROOT/modules/*) 2>&1 | indent
+      $(add_module_option $build_dir/modules/*) 2>&1 | indent
 
     say "Running make"
     make 2>&1 | indent
@@ -228,19 +213,11 @@ fi
 say "Running dependencies postdeploy hook script"
 run_postdeploy_scripts $build_dir/app.json | indent
 
-say "Copying installed dependencies to slug"
-cp -r $ROOT/* $build_dir
-
 if [ $should_cache_nginx == "yes" ]; then
   say "Moving nginx to slug"
   rm -rf "$build_dir/$nginx_path"; mkdir -p "$build_dir/$nginx_path"
   cp -r $nginx_prefix/* "$build_dir/$nginx_path"
   rm -rf $nginx_prefix
 fi
-
-say "Cleaning up env"
-rm -rf $app_path/*
-(cd $app_path; tar xzf "$cache_dir/app-cache.tar.gz")
-rm $cache_dir/app-cache.tar.gz
 
 cp $bp_dir/bin/compile_annotations $build_dir/$nginx_path/sbin
