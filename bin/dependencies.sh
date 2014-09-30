@@ -41,7 +41,7 @@ install_dependency() {
   local install="$(echo "$*" | $jq -c -r '.install')"
 
   local extract_dir="${ROOT%/}/${path#/}"
-  local checksum="$md5 $name"
+  local checksum="$md5  $name"
 
   assert_json_value $name ".name is required"
   assert_json_value $md5  ".md5 is required"
@@ -52,8 +52,8 @@ install_dependency() {
 
   # Check if already installed
   local is_cached='no'
-  local cached_checksum=$(cat "$DEPENDENCIES_CACHE_DIR/$name/checksum" 2> /dev/null | head -n1)
-  if [[ $cached_checksum == $checksum ]]; then
+  local cached_checksum="$(cat "$DEPENDENCIES_CACHE_DIR/$name/checksum" 2> /dev/null | head -n1)"
+  if [[ "$cached_checksum" == $checksum ]]; then
     echo "  $name is cached"
     is_cached='yes'
   else
@@ -68,7 +68,7 @@ install_dependency() {
     curl -L $url -s -o $name
 
     # Check download
-    echo $checksum | md5sum --check --quiet --status -
+    echo "$checksum" | md5sum --check --quiet --status -
     if [[ $? -ne 0 ]]; then
       echo "Checksum md5 did not match; exiting" >&2
       exit 1
@@ -99,7 +99,7 @@ install_dependency() {
 
   # Save installed dependency data & metadata
   cp "$name" "$DEPENDENCIES_CACHE_DIR/$name/"
-  echo $checksum > "$DEPENDENCIES_CACHE_DIR/$name/checksum"
+  echo "$checksum" > "$DEPENDENCIES_CACHE_DIR/$name/checksum"
   echo $extracted_root_dir > "$DEPENDENCIES_CACHE_DIR/$name/root-path"
 
   # Remove downloaded file
