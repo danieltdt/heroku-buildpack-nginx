@@ -19,8 +19,16 @@ export_env_dir $env_dir
 # Defaults app path to heroku default app path
 app_path=${APP_PATH:-/app}
 
-# Clear app dir
-rm -rf "$app_path/*"
+# Cache and clear app dir
+shopt -s dotglob
+
+pushd . > /dev/null
+cd "$app_path"
+tar czf "$cache_dir/app-cache.tar.gz" *
+popd > /dev/null
+
+rm -rf $app_path/*
+shopt -u dotglob
 
 # Set config vars for dependencies.sh
 ROOT=${ROOT:-"$app_path"}
@@ -232,5 +240,7 @@ fi
 
 say "Cleaning up env"
 rm -rf $app_path/*
+(cd $app_path; tar xzf "$cache_dir/app-cache.tar.gz")
+rm $cache_dir/app-cache.tar.gz
 
 cp $bp_dir/bin/compile_annotations $build_dir/$nginx_path/sbin
