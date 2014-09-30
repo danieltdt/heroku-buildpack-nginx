@@ -130,6 +130,16 @@ get_installed_path() {
   echo $(cat "$DEPENDENCIES_CACHE_DIR/$name/root-path")
 }
 
+get_configure_opts() {
+  local configure=''
+
+  while read -r dep_json; do
+    configure="$configure $(echo $dep_json | $jq -c -r '.configure // ""')"
+  done < <( cat $1 | $jq -c -r '.dependencies // [] | .[]')
+
+  echo $(eval "echo $configure")
+}
+
 install_dependencies() {
   while read -r dep_json; do
     install_dependency $dep_json

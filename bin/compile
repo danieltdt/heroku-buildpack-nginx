@@ -153,6 +153,7 @@ else
       --with-http_gzip_static_module \
       --with-http_addition_module \
       --with-pcre=$pcre_path \
+      $(get_configure_opts $build_dir/app.json) \
       $(add_module_option $build_dir/modules/* $ROOT/modules/*) 2>&1 | indent
 
     say "Running make"
