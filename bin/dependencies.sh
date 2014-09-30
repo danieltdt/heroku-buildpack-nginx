@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-jq="$(cd $(dirname $0); cd ..; pwd)/vendor/jq"
+jq=${jq:-"$(cd $(dirname $0); cd ..; pwd)/vendor/jq"}
 
 ROOT=${ROOT:-/app}
 DEPENDENCIES_CACHE_DIR=${DEPENDENCIES_CACHE_DIR:?DEPENDENCIES_CACHE_DIR is not defined!}
