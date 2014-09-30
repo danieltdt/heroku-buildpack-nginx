@@ -114,29 +114,6 @@ else
       rm nginx-source.tar.gz
     fi
 
-    # get PCRE
-    pcre_path=''
-    # Check if PCRE_PATH is defined
-    if [[ -n $PCRE_PATH ]]; then
-      echo "PCRE_PATH is declared; using it to compile" | indent
-      pcre_path="$PCRE_PATH"
-    elif [ -z $IGNORE_PCRE_CACHE ] && [ -d "$nginx_cache_source"/pcre-src/pcre* ]; then
-      echo "PCRE found on cache; using it to compile" | indent
-      pcre_path=$(echo "$nginx_cache_source"/pcre-src/pcre*)
-    else
-      say "Downloading PCRE source"
-      curl -L http://sourceforge.net/projects/pcre/files/latest/download -s -o pcre-latest.tar
-      # TODO: Verify pcre download
-
-      pcre_dir_name=$(tar tf pcre-latest.tar | head -n1 || echo '' > /dev/null)
-      pcre_path="$nginx_cache_source/pcre-src/$pcre_dir_name"
-
-      # Extract
-      mkdir -p "$nginx_cache_source/pcre-src"
-      tar xf pcre-latest.tar -C "$nginx_cache_source/pcre-src"
-      rm pcre-latest.tar
-    fi
-
     # Compile & install
     cd $nginx_cache_source/$nginx_filename
     say "Running configure"
@@ -145,7 +122,6 @@ else
       --with-http_ssl_module \
       --with-http_gzip_static_module \
       --with-http_addition_module \
-      --with-pcre=$pcre_path \
       $(get_configure_opts $build_dir/app.json) \
       $(add_module_option $build_dir/modules/*) 2>&1 | indent
 

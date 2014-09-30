@@ -91,8 +91,7 @@ install_dependency() {
   # Install
   if [ "x$install" != "x" ] && [ "x$install" != "xnull" ]; then
     local THIS="$extracted_root_dir"
-    install=$(echo $install | sed -e "s#\$ROOT#$ROOT#g")
-    install=$(echo $install | sed -e "s#\$THIS#$THIS#g")
+    install=$(eval "THIS=$THIS ROOT=$ROOT echo \"$install\"")
     echo "Installing $name"
     echo "  $install"
     (cd "$extracted_root_dir"; eval ${install[*]})
@@ -118,8 +117,7 @@ run_postdeploy_script() {
 
   local extracted_root_dir=$(cat $DEPENDENCIES_CACHE_DIR/$name/root-path)
   local THIS="$extracted_root_dir"
-  script=$(echo $script | sed -e "s#\$ROOT#$ROOT#g")
-  script=$(echo $script | sed -e "s#\$THIS#$THIS#g")
+  script=$(eval "THIS=$THIS ROOT=$ROOT echo \"$script\"")
   echo "Postdeploy $name"
   echo "  $script"
   (cd $extracted_root_dir; eval ${script[*]})
@@ -135,10 +133,15 @@ get_configure_opts() {
   local configure=''
 
   while read -r dep_json; do
-    configure="$configure $(echo $dep_json | $jq -c -r '.configure // ""')"
+    local name=$(echo $dep_json | $jq -c -r '.name')
+    local THIS=$(cat $DEPENDENCIES_CACHE_DIR/$name/root-path)
+    local current_configure=$(echo $dep_json | $jq -c -r '.configure // ""')
+    current_configure=$(eval "THIS=$THIS ROOT=$ROOT echo \"$current_configure\"")
+
+    configure="$configure $current_configure"
   done < <( cat $1 | $jq -c -r '.dependencies // [] | .[]')
 
-  echo $(eval "echo $configure")
+  echo $configure
 }
 
 install_dependencies() {
