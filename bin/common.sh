@@ -24,6 +24,10 @@ indent() {
   esac
 }
 
+resolve_nginx_version() {
+  echo $(curl --silent --get --data-urlencode "range=$1" https://semver.io/nginx/resolve)
+}
+
 add_nginx_mantainers_pgp_keys() {
   curl http://nginx.org/keys/aalexeev.key -s | gpg --import - && \
   curl http://nginx.org/keys/is.key       -s | gpg --import - && \

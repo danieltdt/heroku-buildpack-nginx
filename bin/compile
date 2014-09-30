@@ -30,7 +30,7 @@ source $bp_dir/bin/dependencies.sh
 
 # Resolve nginx version
 semver_range=$(cat $build_dir/app.json | $bp_dir/vendor/jq -r .engines.nginx)
-nginx_version=$(curl --silent --get --data-urlencode "range=${semver_range}" https://semver.io/nginx/resolve)
+nginx_version=$(resolve_nginx_version "$semver_range")
 
 # Recommend using semver ranges in a safe manner
 if [ "$semver_range" == "null" ]; then
